@@ -71,6 +71,69 @@ pub fn issue_cert(
 ) -> Result<(), String> {
     step("Issuing certificate");
     ensure_root()?;
+    let cert_output_path =
+        resolve_optional_path(args.cert_output_path, env_overrides, "CERT_OUTPUT_PATH");
+    let key_output_path =
+        resolve_optional_path(args.key_output_path, env_overrides, "KEY_OUTPUT_PATH");
+    if cert_output_path.is_some() ^ key_output_path.is_some() {
+        return Err("Both CERT_OUTPUT_PATH and KEY_OUTPUT_PATH must be set together".to_string());
+    }
+    let cert_input_path =
+        resolve_optional_path(args.cert_input_path, env_overrides, "CERT_INPUT_PATH");
+    let key_input_path =
+        resolve_optional_path(args.key_input_path, env_overrides, "KEY_INPUT_PATH");
+    if cert_input_path.is_some() ^ key_input_path.is_some() {
+        return Err("Both CERT_INPUT_PATH and KEY_INPUT_PATH must be set together".to_string());
+    }
+    let using_input = cert_input_path.is_some();
+
+    let needs_domain_for_output = cert_output_path.is_none() || key_output_path.is_none();
+    let domain = if using_input && !needs_domain_for_output {
+        None
+    } else {
+        Some(resolve_value(
+            args.domain,
+            env_overrides,
+            "DOMAIN",
+            "Primary domain (e.g., example.com)",
+            false,
+        )?)
+    };
+    let cert_dir = if needs_domain_for_output {
+        Some(resolve_cert_dir(
+            resolve_optional_path(args.cert_dir, env_overrides, "CERT_DIR"),
+            args.cert_dir_name,
+            env_overrides,
+            &["CERT_DIR_NAME"],
+            "custom",
+        )?)
+    } else {
+        None
+    };
+    let (cert_dst, key_dst) =
+        resolve_cert_paths(cert_output_path, key_output_path, cert_dir, domain.clone())?;
+    let nginx_bin = if reload_nginx {
+        Some(resolve_path(
+            args.nginx_bin,
+            env_overrides,
+            "NGINX_BIN",
+            "nginx",
+            "nginx binary",
+        )?)
+    } else {
+        None
+    };
+
+    if using_input {
+        let cert_src = cert_input_path.ok_or("CERT_INPUT_PATH is required".to_string())?;
+        let key_src = key_input_path.ok_or("KEY_INPUT_PATH is required".to_string())?;
+        copy_cert_files(&cert_src, &key_src, &cert_dst, &key_dst, dry_run)?;
+        if reload_nginx {
+            reload_nginx_binary(nginx_bin.as_ref(), dry_run)?;
+        }
+        return Ok(());
+    }
+
     let cf_token = resolve_value(
         args.cf_token,
         env_overrides,
@@ -92,13 +155,7 @@ pub fn issue_cert(
         "Cloudflare zone ID",
         false,
     )?;
-    let domain = resolve_value(
-        args.domain,
-        env_overrides,
-        "DOMAIN",
-        "Primary domain (e.g., example.com)",
-        false,
-    )?;
+    let domain = domain.ok_or("DOMAIN is required".to_string())?;
     let wildcard_domain = resolve_optional_value(
         args.wildcard_domain,
         env_overrides,
@@ -121,28 +178,6 @@ pub fn issue_cert(
         "ACME_HOME",
         "/root/.acme.sh",
         "acme home directory",
-    )?;
-    let cert_dir = resolve_optional_path(args.cert_dir, env_overrides, "CERT_DIR");
-    let cert_dir = resolve_cert_dir(
-        cert_dir,
-        args.cert_dir_name,
-        env_overrides,
-        &["CERT_DIR_NAME"],
-        "custom",
-    )?;
-    let cert_output_path =
-        resolve_optional_path(args.cert_output_path, env_overrides, "CERT_OUTPUT_PATH");
-    let key_output_path =
-        resolve_optional_path(args.key_output_path, env_overrides, "KEY_OUTPUT_PATH");
-    if cert_output_path.is_some() ^ key_output_path.is_some() {
-        return Err("Both CERT_OUTPUT_PATH and KEY_OUTPUT_PATH must be set together".to_string());
-    }
-    let nginx_bin = resolve_path(
-        args.nginx_bin,
-        env_overrides,
-        "NGINX_BIN",
-        "nginx",
-        "nginx binary",
     )?;
 
     let cache_dir = acme_home.join(format!("{}_ecc", domain));
@@ -188,73 +223,11 @@ pub fn issue_cert(
 
     let cert_src = cache_dir.join("fullchain.cer");
     let key_src = cache_dir.join(format!("{}.key", domain));
-    let (cert_dst, key_dst) = match (cert_output_path, key_output_path) {
-        (Some(cert_path), Some(key_path)) => (cert_path, key_path),
-        _ => (
-            cert_dir.join(format!("{}.cer", domain)),
-            cert_dir.join(format!("{}.key", domain)),
-        ),
-    };
 
-    let cert_parent_display = cert_dst
-        .parent()
-        .map(|p| p.display().to_string())
-        .unwrap_or_else(|| "/".to_string());
-    if dry_run {
-        info(&format!(
-            "[dry-run] Would create cert dir: {}",
-            cert_parent_display
-        ));
-    } else if let Some(parent) = cert_dst.parent() {
-        fs::create_dir_all(parent)
-            .map_err(|e| format!("Failed to create {}: {e}", parent.display()))?;
-    }
-
-    if dry_run {
-        info(&format!(
-            "[dry-run] Would copy cert: {} -> {}",
-            cert_src.display(),
-            cert_dst.display()
-        ));
-        info(&format!(
-            "[dry-run] Would copy key: {} -> {}",
-            key_src.display(),
-            key_dst.display()
-        ));
-    } else {
-        fs::copy(&cert_src, &cert_dst)
-            .map_err(|e| format!("Failed to copy cert from {}: {e}", cert_src.display()))?;
-        fs::copy(&key_src, &key_dst)
-            .map_err(|e| format!("Failed to copy key from {}: {e}", key_src.display()))?;
-        success("Certificate files updated");
-    }
+    copy_cert_files(&cert_src, &key_src, &cert_dst, &key_dst, dry_run)?;
 
     if reload_nginx {
-        if dry_run {
-            info("[dry-run] Would run nginx -t and reload");
-        } else {
-            let status = Command::new(&nginx_bin)
-                .arg("-t")
-                .stdout(Stdio::inherit())
-                .stderr(Stdio::inherit())
-                .status()
-                .map_err(|e| format!("Failed to run nginx -t: {e}"))?;
-            if !status.success() {
-                return Err("nginx -t failed".to_string());
-            }
-
-            let status = Command::new(&nginx_bin)
-                .arg("-s")
-                .arg("reload")
-                .stdout(Stdio::inherit())
-                .stderr(Stdio::inherit())
-                .status()
-                .map_err(|e| format!("Failed to reload nginx: {e}"))?;
-            if !status.success() {
-                return Err("nginx reload failed".to_string());
-            }
-            success("nginx reloaded");
-        }
+        reload_nginx_binary(nginx_bin.as_ref(), dry_run)?;
     }
 
     setup_acme_renew_cron(&acme_bin, &acme_home, dry_run)?;
@@ -448,6 +421,10 @@ pub fn print_params_table() -> Result<(), String> {
         ("CERT_DIR", "Certificate directory (env)"),
         ("--cert-dir-name", "Certificate directory name"),
         ("CERT_DIR_NAME", "Certificate directory name (env)"),
+        ("--cert-input-path", "Certificate input path"),
+        ("CERT_INPUT_PATH", "Certificate input path (env)"),
+        ("--key-input-path", "Key input path"),
+        ("KEY_INPUT_PATH", "Key input path (env)"),
         ("--cert-output-path", "Certificate output path"),
         ("CERT_OUTPUT_PATH", "Certificate output path (env)"),
         ("--key-output-path", "Key output path"),
@@ -520,6 +497,79 @@ pub fn print_params_table() -> Result<(), String> {
         );
     }
     println!("{}", border);
+    Ok(())
+}
+
+fn copy_cert_files(
+    cert_src: &Path,
+    key_src: &Path,
+    cert_dst: &Path,
+    key_dst: &Path,
+    dry_run: bool,
+) -> Result<(), String> {
+    let cert_parent_display = cert_dst
+        .parent()
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|| "/".to_string());
+    if dry_run {
+        info(&format!(
+            "[dry-run] Would create cert dir: {}",
+            cert_parent_display
+        ));
+    } else if let Some(parent) = cert_dst.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|e| format!("Failed to create {}: {e}", parent.display()))?;
+    }
+
+    if dry_run {
+        info(&format!(
+            "[dry-run] Would copy cert: {} -> {}",
+            cert_src.display(),
+            cert_dst.display()
+        ));
+        info(&format!(
+            "[dry-run] Would copy key: {} -> {}",
+            key_src.display(),
+            key_dst.display()
+        ));
+    } else {
+        fs::copy(cert_src, cert_dst)
+            .map_err(|e| format!("Failed to copy cert from {}: {e}", cert_src.display()))?;
+        fs::copy(key_src, key_dst)
+            .map_err(|e| format!("Failed to copy key from {}: {e}", key_src.display()))?;
+        success("Certificate files updated");
+    }
+    Ok(())
+}
+
+fn reload_nginx_binary(nginx_bin: Option<&PathBuf>, dry_run: bool) -> Result<(), String> {
+    let nginx_bin = nginx_bin.ok_or("nginx binary is required for reload".to_string())?;
+    if dry_run {
+        info("[dry-run] Would run nginx -t and reload");
+        return Ok(());
+    }
+
+    let status = Command::new(nginx_bin)
+        .arg("-t")
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        .status()
+        .map_err(|e| format!("Failed to run nginx -t: {e}"))?;
+    if !status.success() {
+        return Err("nginx -t failed".to_string());
+    }
+
+    let status = Command::new(nginx_bin)
+        .arg("-s")
+        .arg("reload")
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        .status()
+        .map_err(|e| format!("Failed to reload nginx: {e}"))?;
+    if !status.success() {
+        return Err("nginx reload failed".to_string());
+    }
+    success("nginx reloaded");
     Ok(())
 }
 

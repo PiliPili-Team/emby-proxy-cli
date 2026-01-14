@@ -26,6 +26,8 @@ pub struct IssueCertArgs {
     pub acme_home: Option<PathBuf>,
     pub cert_dir: Option<PathBuf>,
     pub cert_dir_name: Option<String>,
+    pub cert_input_path: Option<PathBuf>,
+    pub key_input_path: Option<PathBuf>,
     pub cert_output_path: Option<PathBuf>,
     pub key_output_path: Option<PathBuf>,
     pub nginx_bin: Option<PathBuf>,
@@ -74,6 +76,10 @@ pub enum Commands {
         cert_dir: Option<PathBuf>,
         #[arg(long)]
         cert_dir_name: Option<String>,
+        #[arg(long)]
+        cert_input_path: Option<PathBuf>,
+        #[arg(long)]
+        key_input_path: Option<PathBuf>,
         #[arg(long)]
         cert_output_path: Option<PathBuf>,
         #[arg(long)]
