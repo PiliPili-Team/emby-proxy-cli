@@ -26,6 +26,7 @@ pub fn setup_system(
     dry_run: bool,
 ) -> Result<(), String> {
     step("System setup");
+    ensure_linux()?;
     ensure_root()?;
     let start = Instant::now();
     let mut changes: Vec<String> = Vec::new();
@@ -820,6 +821,22 @@ fn read_os_codename() -> Result<String, String> {
         return Err("Failed to read OS codename".to_string());
     }
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+fn ensure_linux() -> Result<(), String> {
+    if std::env::consts::OS == "linux" {
+        return Ok(());
+    }
+    let version = read_uname().unwrap_or_else(|| std::env::consts::OS.to_string());
+    Err(format!(
+        "Unsupported platform: not a Linux distribution. System: {}",
+        version
+    ))
+}
+
+fn read_uname() -> Option<String> {
+    let output = Command::new("uname").arg("-a").output().ok()?;
+    Some(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
 fn ensure_root() -> Result<(), String> {
