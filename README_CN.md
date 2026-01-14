@@ -170,3 +170,4 @@ emby-proxy-cli --env CF_TOKEN=*** --env DOMAIN=example.com issue-cert
 ## 文档
 
 - 常用操作: [`USAGE.md`](./docs/USAGE_CN.md)
+- 流程图: [`FLOW.md`](./docs/FLOW_CN.md)

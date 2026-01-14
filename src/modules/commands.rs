@@ -9,12 +9,58 @@ use crate::modules::{
 };
 use std::{
     collections::HashMap,
-    fs,
-    path::PathBuf,
+    env, fs,
+    path::{Path, PathBuf},
     process::{Command, Stdio},
+    sync::mpsc,
+    thread,
+    time::{Duration, Instant},
 };
 
 const DEFAULT_RESOLVER: &str = "1.1.1.1 1.0.0.1 [2606:4700:4700::1111] [2606:4700:4700::1064]";
+
+pub fn setup_system(
+    install_zsh: bool,
+    install_cron: bool,
+    install_nginx: bool,
+    dry_run: bool,
+) -> Result<(), String> {
+    step("System setup");
+    ensure_root()?;
+    let start = Instant::now();
+    let mut changes: Vec<String> = Vec::new();
+
+    if install_zsh {
+        if command_exists("zsh") {
+            info("zsh is already installed");
+        } else if confirm_with_timeout("Install zsh?", DEFAULT_CONFIRM_TIMEOUT, dry_run)? {
+            install_if_missing("zsh", &mut changes, dry_run, |dry| {
+                run_cmd("apt-get", &["update", "-qq"], dry)?;
+                run_cmd("apt-get", &["install", "-y", "zsh"], dry)
+            })?;
+        } else {
+            info("zsh install skipped");
+        }
+    }
+
+    if install_cron {
+        install_if_missing("crontab", &mut changes, dry_run, |dry| {
+            run_cmd("apt-get", &["update", "-qq"], dry)?;
+            run_cmd("apt-get", &["install", "-y", "cron"], dry)?;
+            run_cmd("systemctl", &["enable", "cron"], dry)?;
+            run_cmd("systemctl", &["start", "cron"], dry)
+        })?;
+    }
+
+    if install_nginx {
+        install_if_missing("nginx", &mut changes, dry_run, |dry| {
+            install_nginx_official(dry)
+        })?;
+    }
+
+    print_summary(&changes, start.elapsed());
+    Ok(())
+}
 
 pub fn issue_cert(
     env_overrides: &HashMap<String, String>,
@@ -23,6 +69,7 @@ pub fn issue_cert(
     dry_run: bool,
 ) -> Result<(), String> {
     step("Issuing certificate");
+    ensure_root()?;
     let cf_token = resolve_value(
         args.cf_token,
         env_overrides,
@@ -209,6 +256,8 @@ pub fn issue_cert(
         }
     }
 
+    setup_acme_renew_cron(&acme_bin, &acme_home, dry_run)?;
+
     Ok(())
 }
 
@@ -374,6 +423,11 @@ pub fn print_params_table() -> Result<(), String> {
             "--env KEY=VALUE",
             "Override environment values (repeatable)",
         ),
+        ("setup", "Install zsh/cron/nginx if missing"),
+        ("--install-zsh", "Install zsh if missing"),
+        ("--install-cron", "Install cron if missing"),
+        ("--install-nginx", "Install nginx if missing"),
+        ("--dry-run", "Simulate actions without changes"),
         ("issue-cert", "Issue certs and optionally reload nginx"),
         ("--cf-token", "Cloudflare token"),
         ("CF_TOKEN", "Cloudflare token (env)"),
@@ -466,6 +520,333 @@ pub fn print_params_table() -> Result<(), String> {
     }
     println!("{}", border);
     Ok(())
+}
+
+fn install_if_missing<F>(
+    command_name: &str,
+    changes: &mut Vec<String>,
+    dry_run: bool,
+    installer: F,
+) -> Result<(), String>
+where
+    F: Fn(bool) -> Result<(), String>,
+{
+    if command_exists(command_name) {
+        info(&format!("{} is already installed", command_name));
+        return Ok(());
+    }
+
+    info(&format!("Installing {}", command_name));
+    installer(dry_run)?;
+    if dry_run {
+        changes.push(format!("Would install {}", command_name));
+    } else {
+        changes.push(format!("Installed {}", command_name));
+    }
+    Ok(())
+}
+
+fn install_nginx_official(dry_run: bool) -> Result<(), String> {
+    let os_id = read_os_id()?;
+    match os_id.as_str() {
+        "debian" => install_nginx_debian_like("debian", dry_run),
+        "ubuntu" => install_nginx_debian_like("ubuntu", dry_run),
+        "alpine" => install_nginx_alpine(dry_run),
+        _ => Err(format!("Unsupported OS for nginx install: {}", os_id)),
+    }
+}
+
+fn install_nginx_debian_like(os_id: &str, dry_run: bool) -> Result<(), String> {
+    let keyring_pkg = if os_id == "ubuntu" {
+        "ubuntu-keyring"
+    } else {
+        "debian-archive-keyring"
+    };
+    run_cmd(
+        "apt",
+        &[
+            "install",
+            "-y",
+            "curl",
+            "gnupg2",
+            "ca-certificates",
+            "lsb-release",
+            keyring_pkg,
+        ],
+        dry_run,
+    )?;
+
+    run_cmd(
+        "curl",
+        &[
+            "-o",
+            "/tmp/nginx_signing.key",
+            "https://nginx.org/keys/nginx_signing.key",
+        ],
+        dry_run,
+    )?;
+    run_cmd(
+        "gpg",
+        &[
+            "--dearmor",
+            "-o",
+            "/usr/share/keyrings/nginx-archive-keyring.gpg",
+            "/tmp/nginx_signing.key",
+        ],
+        dry_run,
+    )?;
+
+    let codename = read_os_codename()?;
+    let repo_line = format!(
+        "deb [signed-by=/usr/share/keyrings/nginx-archive-keyring.gpg] https://nginx.org/packages/mainline/{os_id} {codename} nginx\n"
+    );
+    if dry_run {
+        info("[dry-run] Would write /etc/apt/sources.list.d/nginx.list");
+        info("[dry-run] Would write /etc/apt/preferences.d/99nginx");
+    } else {
+        fs::write("/etc/apt/sources.list.d/nginx.list", repo_line)
+            .map_err(|e| format!("Failed to write nginx.list: {e}"))?;
+        let pin = "Package: *\nPin: origin nginx.org\nPin: release o=nginx\nPin-Priority: 900\n";
+        fs::write("/etc/apt/preferences.d/99nginx", pin)
+            .map_err(|e| format!("Failed to write 99nginx: {e}"))?;
+    }
+
+    run_cmd("apt", &["update"], dry_run)?;
+    run_cmd("apt", &["install", "-y", "nginx"], dry_run)?;
+    Ok(())
+}
+
+fn install_nginx_alpine(dry_run: bool) -> Result<(), String> {
+    run_cmd(
+        "apk",
+        &["add", "openssl", "curl", "ca-certificates"],
+        dry_run,
+    )?;
+
+    let release = fs::read_to_string("/etc/alpine-release")
+        .map_err(|e| format!("Failed to read /etc/alpine-release: {e}"))?;
+    let version = release
+        .trim()
+        .split('.')
+        .take(2)
+        .collect::<Vec<_>>()
+        .join(".");
+    let repo_line = format!(
+        "@nginx https://nginx.org/packages/mainline/alpine/v{}/main\n",
+        version
+    );
+
+    if dry_run {
+        info("[dry-run] Would append nginx repo to /etc/apk/repositories");
+    } else {
+        let repos_path = "/etc/apk/repositories";
+        let mut repos = fs::read_to_string(repos_path)
+            .map_err(|e| format!("Failed to read {}: {e}", repos_path))?;
+        if !repos.contains(&repo_line) {
+            if !repos.ends_with('\n') {
+                repos.push('\n');
+            }
+            repos.push_str(&repo_line);
+            fs::write(repos_path, repos)
+                .map_err(|e| format!("Failed to write {}: {e}", repos_path))?;
+        }
+    }
+
+    run_cmd(
+        "curl",
+        &[
+            "-o",
+            "/tmp/nginx_signing.rsa.pub",
+            "https://nginx.org/keys/nginx_signing.rsa.pub",
+        ],
+        dry_run,
+    )?;
+    if dry_run {
+        info("[dry-run] Would move nginx signing key to /etc/apk/keys/");
+    } else {
+        fs::rename(
+            "/tmp/nginx_signing.rsa.pub",
+            "/etc/apk/keys/nginx_signing.rsa.pub",
+        )
+        .map_err(|e| format!("Failed to move nginx signing key: {e}"))?;
+    }
+
+    run_cmd("apk", &["add", "nginx@nginx"], dry_run)?;
+    Ok(())
+}
+
+fn setup_acme_renew_cron(acme_bin: &Path, acme_home: &Path, dry_run: bool) -> Result<(), String> {
+    if !command_exists("crontab") {
+        info("crontab not found, skipping renew cron setup");
+        return Ok(());
+    }
+
+    step("Setting up acme renew cron");
+    let cron_line = format!(
+        "0 0 1,16 * * /bin/sh {} --cron --home {} >/dev/null 2>&1",
+        acme_bin.display(),
+        acme_home.display()
+    );
+
+    if dry_run {
+        info(&format!("[dry-run] Would ensure cron: {}", cron_line));
+        return Ok(());
+    }
+
+    let existing = Command::new("crontab")
+        .arg("-l")
+        .output()
+        .map_err(|e| format!("Failed to read crontab: {e}"))?;
+    let mut content = String::from_utf8_lossy(&existing.stdout).to_string();
+    if content.contains(&cron_line) {
+        info("acme renew cron already exists");
+        return Ok(());
+    }
+
+    if !content.ends_with('\n') {
+        content.push('\n');
+    }
+    content.push_str(&cron_line);
+    content.push('\n');
+
+    let mut child = Command::new("crontab")
+        .arg("-")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        .spawn()
+        .map_err(|e| format!("Failed to write crontab: {e}"))?;
+    if let Some(stdin) = child.stdin.as_mut() {
+        use std::io::Write;
+        stdin
+            .write_all(content.as_bytes())
+            .map_err(|e| format!("Failed to write crontab: {e}"))?;
+    }
+    let status = child
+        .wait()
+        .map_err(|e| format!("Failed to write crontab: {e}"))?;
+    if !status.success() {
+        return Err("Failed to update crontab".to_string());
+    }
+
+    success("acme renew cron added");
+    Ok(())
+}
+
+const DEFAULT_CONFIRM_TIMEOUT: Duration = Duration::from_secs(10);
+
+fn confirm_with_timeout(prompt: &str, timeout: Duration, dry_run: bool) -> Result<bool, String> {
+    if dry_run {
+        info(&format!("[dry-run] Would prompt: {}", prompt));
+        return Ok(false);
+    }
+
+    info(&format!(
+        "{} (y/N) [timeout {}s]",
+        prompt,
+        timeout.as_secs()
+    ));
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let mut input = String::new();
+        let _ = std::io::stdin().read_line(&mut input);
+        let _ = tx.send(input);
+    });
+
+    match rx.recv_timeout(timeout) {
+        Ok(input) => {
+            let trimmed = input.trim();
+            Ok(trimmed.eq_ignore_ascii_case("y") || trimmed.eq_ignore_ascii_case("yes"))
+        }
+        Err(mpsc::RecvTimeoutError::Timeout) => Ok(false),
+        Err(_) => Err("Failed to read input".to_string()),
+    }
+}
+
+fn command_exists(command_name: &str) -> bool {
+    if let Ok(path_var) = env::var("PATH") {
+        for dir in path_var.split(':') {
+            let candidate = Path::new(dir).join(command_name);
+            if candidate.exists() {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn run_cmd(cmd: &str, args: &[&str], dry_run: bool) -> Result<(), String> {
+    if dry_run {
+        info(&format!("[dry-run] Would run: {} {}", cmd, args.join(" ")));
+        return Ok(());
+    }
+    let status = Command::new(cmd)
+        .args(args)
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        .status()
+        .map_err(|e| format!("Failed to run {}: {e}", cmd))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!("Command failed: {}", cmd))
+    }
+}
+
+fn read_os_id() -> Result<String, String> {
+    let content = fs::read_to_string("/etc/os-release")
+        .map_err(|e| format!("Failed to read /etc/os-release: {e}"))?;
+    for line in content.lines() {
+        if let Some(value) = line.strip_prefix("ID=") {
+            return Ok(value.trim_matches('"').to_string());
+        }
+    }
+    Err("OS ID not found in /etc/os-release".to_string())
+}
+
+fn read_os_codename() -> Result<String, String> {
+    let content = fs::read_to_string("/etc/os-release")
+        .map_err(|e| format!("Failed to read /etc/os-release: {e}"))?;
+    for line in content.lines() {
+        if let Some(value) = line.strip_prefix("VERSION_CODENAME=") {
+            return Ok(value.trim_matches('"').to_string());
+        }
+    }
+    let output = Command::new("lsb_release")
+        .arg("-cs")
+        .output()
+        .map_err(|e| format!("Failed to run lsb_release: {e}"))?;
+    if !output.status.success() {
+        return Err("Failed to read OS codename".to_string());
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+fn ensure_root() -> Result<(), String> {
+    let output = Command::new("id")
+        .arg("-u")
+        .output()
+        .map_err(|e| format!("Failed to check uid: {e}"))?;
+    let uid = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if uid != "0" {
+        return Err("This command must be run as root".to_string());
+    }
+    Ok(())
+}
+
+fn print_summary(changes: &[String], elapsed: std::time::Duration) {
+    step("Summary");
+    if changes.is_empty() {
+        info("No changes were made");
+    } else {
+        for change in changes {
+            success(change);
+        }
+    }
+    let seconds = elapsed.as_secs();
+    let minutes = seconds / 60;
+    let remainder = seconds % 60;
+    info(&format!("Execution time: {}m {}s", minutes, remainder));
 }
 
 fn resolve_cert_paths(

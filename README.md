@@ -162,3 +162,5 @@ Or create a local `.env` file (see [`.env.example`](./.env.example)) and export 
 ## Docs
 
 - Common operations: [`USAGE.md`](./docs/USAGE.md)
+* Flow diagram: [`FLOW.md`](./docs/FLOW.md)
+

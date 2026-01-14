@@ -45,6 +45,16 @@ pub struct WriteProxyArgs {
 
 #[derive(Subcommand, Debug)]
 pub enum Commands {
+    Setup {
+        #[arg(long, default_value_t = true)]
+        install_zsh: bool,
+        #[arg(long, default_value_t = true)]
+        install_cron: bool,
+        #[arg(long, default_value_t = true)]
+        install_nginx: bool,
+        #[arg(long)]
+        dry_run: bool,
+    },
     IssueCert {
         #[arg(long)]
         cf_token: Option<String>,

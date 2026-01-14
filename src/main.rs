@@ -2,13 +2,21 @@ mod modules;
 
 use clap::Parser;
 use modules::cli::{Cli, Commands, IssueCertArgs, WriteProxyArgs};
-use modules::commands::{issue_cert, print_params_table, write_nginx_default, write_proxy_config};
+use modules::commands::{
+    issue_cert, print_params_table, setup_system, write_nginx_default, write_proxy_config,
+};
 
 fn main() -> Result<(), String> {
     let cli = Cli::parse();
     let env_overrides = modules::env::to_env_map(&cli.env_overrides);
 
     match cli.command {
+        Commands::Setup {
+            install_zsh,
+            install_cron,
+            install_nginx,
+            dry_run,
+        } => setup_system(install_zsh, install_cron, install_nginx, dry_run),
         Commands::IssueCert {
             cf_token,
             cf_account_id,
