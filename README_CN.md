@@ -12,7 +12,7 @@
   </a>
 </p>
 
-Emby Proxy CLI 是一个基于 Rust 的工具，用于通过 acme.sh 申请证书并生成 Nginx 反向代理配置，避免硬编码敏感信息。
+Emby Proxy CLI 是一个基于 Rust 反向代理前后端分离 Emby 服务端的工具，用于通过 acme.sh 申请证书并生成 Nginx 反向代理配置，避免硬编码敏感信息。
 
 [English](README.md) | 中文文档
 
@@ -32,7 +32,7 @@ Emby Proxy CLI 是一个基于 Rust 的工具，用于通过 acme.sh 申请证�
 ## 构建
 
 ```bash
-cargo build
+cargo build --release
 ```
 
 ## 快速开始

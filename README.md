@@ -12,7 +12,7 @@
   </a>
 </p>
 
-Emby Proxy CLI is a Rust-based tool for issuing certificates with acme.sh and generating Nginx reverse proxy configs without hardcoded secrets.
+Emby Proxy CLI is a Rust-based reverse proxy tool for front-end/back-end separated Emby servers, issuing certificates with acme.sh and generating Nginx reverse proxy configs without hardcoded secrets.
 
 [English](#features) | [中文文档](README_CN.md)
 
@@ -32,7 +32,7 @@ Emby Proxy CLI is a Rust-based tool for issuing certificates with acme.sh and ge
 ## Build
 
 ```bash
-cargo build
+cargo build --release
 ```
 
 ## Quick Start
