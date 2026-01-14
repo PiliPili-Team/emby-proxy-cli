@@ -1,0 +1,160 @@
+name: release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to release (e.g., v0.0.1)"
+        required: true
+        default: "v0.0.1"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            needs_aarch64_toolchain: false
+          - target: aarch64-unknown-linux-gnu
+            needs_aarch64_toolchain: true
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install aarch64 toolchain
+        if: matrix.needs_aarch64_toolchain
+        run: sudo apt-get update -y && sudo apt-get install -y gcc-aarch64-linux-gnu
+
+      - name: Add target
+        run: rustup target add ${{ matrix.target }}
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-${{ matrix.target }}-
+
+      - name: Build
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Package
+        run: |
+          mkdir -p dist
+          cp "target/${{ matrix.target }}/release/emby-proxy-cli" "dist/emby-proxy-cli-${{ matrix.target }}"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: emby-proxy-cli-${{ matrix.target }}
+          path: dist/emby-proxy-cli-${{ matrix.target }}
+
+  release:
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify tag matches Cargo.toml
+        run: |
+          TAG="${{ inputs.tag }}"
+          VERSION=$(grep -E '^version' Cargo.toml | head -n1 | sed -E 's/version *= *"([^"]+)"/\1/')
+          if [ "v$VERSION" != "$TAG" ]; then
+            echo "Tag $TAG does not match Cargo.toml version v$VERSION"
+            exit 1
+          fi
+
+      - name: Create tag if missing
+        run: |
+          TAG="${{ inputs.tag }}"
+          if git rev-parse "$TAG" >/dev/null 2>&1; then
+            echo "Tag $TAG already exists"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "$TAG" -m "$TAG"
+          git push origin "$TAG"
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      - name: Prepare SHA512SUMS
+        run: |
+          cd dist
+          find . -type f -name 'emby-proxy-cli-*' -print0 | xargs -0 sha512sum > SHA512SUMS
+
+      - name: Generate release notes
+        run: |
+          TAG="${{ inputs.tag }}"
+          PREV_TAG=$(git tag --sort=-v:refname | grep -v "^${TAG}$" | head -n1)
+          if [ -n "$PREV_TAG" ]; then
+            RANGE="$PREV_TAG..$TAG"
+            COMMITS=$(git log --format='%s' "$RANGE")
+          else
+            COMMITS=$(git log -n 5 --format='%s')
+          fi
+
+          NOTES_FILE="RELEASE_NOTES.md"
+          echo "Whats' Changed" > "$NOTES_FILE"
+          echo "" >> "$NOTES_FILE"
+
+          declare -A sections
+          while IFS= read -r line; do
+            if echo "$line" | grep -Eq '^[a-zA-Z]+(\([^)]*\))?!?: '; then
+              type=$(echo "$line" | sed -E 's/^([a-zA-Z]+)(\([^)]*\))?!?: .*/\1/')
+              subject=$(echo "$line" | sed -E 's/^[a-zA-Z]+(\([^)]*\))?!?: //')
+            else
+              type="other"
+              subject="$line"
+            fi
+            key=$(echo "$type" | tr 'A-Z' 'a-z')
+            sections["$key"]+="- $subject\n"
+          done <<< "$COMMITS"
+
+          add_section() {
+            title="$1"
+            key="$2"
+            if [ -n "${sections[$key]}" ]; then
+              echo "## $title" >> "$NOTES_FILE"
+              echo -e "${sections[$key]}" >> "$NOTES_FILE"
+            fi
+          }
+
+          add_section "Fix" "fix"
+          add_section "Feat" "feat"
+          add_section "Chore" "chore"
+          add_section "Docs" "docs"
+          add_section "Refactor" "refactor"
+          add_section "Perf" "perf"
+          add_section "Test" "test"
+          add_section "Build" "build"
+          add_section "Ci" "ci"
+          add_section "Other" "other"
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.tag }}
+          name: ${{ inputs.tag }}
+          body_path: RELEASE_NOTES.md
+          files: |
+            dist/**/emby-proxy-cli-*
+            dist/SHA512SUMS

@@ -1,0 +1,20 @@
+server {
+    listen 80 default_server;
+    listen [::]:80 default_server;
+
+    server_name _;
+    return 444;
+}
+
+server {
+    listen 443 ssl default_server;
+    listen [::]:443 ssl default_server;
+    http2 on;
+
+    server_name _;
+
+    ssl_certificate {{CERT_PATH}};
+    ssl_certificate_key {{KEY_PATH}};
+
+    return 444;
+}
