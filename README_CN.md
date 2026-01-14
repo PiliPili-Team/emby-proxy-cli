@@ -19,7 +19,7 @@ Emby Proxy CLI 是一个基于 Rust 反向代理前后端分离 Emby 服务端�
 ## 功能
 
 - 证书申请：参数 / 环境变量 / 交互式输入三选一。
-- 生成 Nginx 默认配置与反代配置 [LICENSE](LICENSE) （内置模板）。
+- 通过内置模板生成 Nginx 默认配置与反代配置。
 - Dry-run 模式安全预演。
 - DNS resolver 可通过参数/环境变量或交互选择（默认 Cloudflare）。
 
