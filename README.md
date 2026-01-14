@@ -155,9 +155,8 @@ You can pass env overrides inline:
 emby-proxy-cli --env CF_TOKEN=*** --env DOMAIN=example.com issue-cert
 ```
 
-Or create a local `.env` file (see `.env.example`) and export it before running the CLI.
+Or create a local `.env` file (see [`.env.example`](./.env.example)) and export it before running the CLI.
 
 ## Docs
 
-- Common operations (EN): `docs/USAGE.md`
-- 常用操作（中文）: `docs/USAGE_CN.md`
+- Common operations: [`USAGE.md`](./docs/USAGE.md)

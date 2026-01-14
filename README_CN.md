@@ -163,9 +163,8 @@ emby-proxy-cli write-proxy-config --proxy-domain proxy.example.com --backend-url
 emby-proxy-cli --env CF_TOKEN=*** --env DOMAIN=example.com issue-cert
 ```
 
-也可以准备 `.env`（参考 `.env.example`），并在运行前导出。
+也可以准备 `.env` (参考 [`.env.example`](./.env.example))，并在运行前导出。
 
 ## 文档
 
-- Common operations (EN): `docs/USAGE.md`
-- 常用操作（中文）: `docs/USAGE_CN.md`
+- 常用操作: [`USAGE.md`](./docs/USAGE_CN.md)
