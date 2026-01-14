@@ -4,7 +4,7 @@ use crate::modules::{
         resolve_cert_dir, resolve_optional_path, resolve_optional_value, resolve_path,
         resolve_resolvers, resolve_value,
     },
-    log::info,
+    log::{info, step, success},
     templates::{NGINX_DEFAULT_TEMPLATE, NGINX_PROXY_TEMPLATE},
 };
 use std::{
@@ -22,6 +22,7 @@ pub fn issue_cert(
     reload_nginx: bool,
     dry_run: bool,
 ) -> Result<(), String> {
+    step("Issuing certificate");
     let cf_token = resolve_value(
         args.cf_token,
         env_overrides,
@@ -134,6 +135,7 @@ pub fn issue_cert(
         if !status.success() {
             return Err("Certificate issuance failed".to_string());
         }
+        success("Certificate issuance completed");
     }
 
     let cert_src = cache_dir.join("fullchain.cer");
@@ -176,6 +178,7 @@ pub fn issue_cert(
             .map_err(|e| format!("Failed to copy cert from {}: {e}", cert_src.display()))?;
         fs::copy(&key_src, &key_dst)
             .map_err(|e| format!("Failed to copy key from {}: {e}", key_src.display()))?;
+        success("Certificate files updated");
     }
 
     if reload_nginx {
@@ -202,6 +205,7 @@ pub fn issue_cert(
             if !status.success() {
                 return Err("nginx reload failed".to_string());
             }
+            success("nginx reloaded");
         }
     }
 
@@ -242,18 +246,7 @@ pub fn write_nginx_default(
     } else {
         None
     };
-    let cert_path = cert_path.unwrap_or_else(|| {
-        cert_dir
-            .as_ref()
-            .expect("cert_dir missing")
-            .join(format!("{}.cer", domain.as_ref().expect("domain missing")))
-    });
-    let key_path = key_path.unwrap_or_else(|| {
-        cert_dir
-            .as_ref()
-            .expect("cert_dir missing")
-            .join(format!("{}.key", domain.as_ref().expect("domain missing")))
-    });
+    let (cert_path, key_path) = resolve_cert_paths(cert_path, key_path, cert_dir, domain)?;
     let output_path = resolve_path(
         output_path,
         env_overrides,
@@ -262,6 +255,7 @@ pub fn write_nginx_default(
         "nginx default output path",
     )?;
 
+    step("Writing nginx default config");
     if let Some(parent) = output_path.parent() {
         if dry_run {
             info(&format!(
@@ -286,6 +280,7 @@ pub fn write_nginx_default(
     } else {
         fs::write(&output_path, content)
             .map_err(|e| format!("Failed to write {}: {e}", output_path.display()))?;
+        success("nginx default config written");
     }
     Ok(())
 }
@@ -295,6 +290,7 @@ pub fn write_proxy_config(
     args: WriteProxyArgs,
     dry_run: bool,
 ) -> Result<(), String> {
+    step("Writing reverse proxy config");
     let proxy_domain = resolve_value(
         args.proxy_domain,
         env_overrides,
@@ -337,18 +333,7 @@ pub fn write_proxy_config(
     } else {
         None
     };
-    let cert_path = cert_path.unwrap_or_else(|| {
-        cert_dir
-            .as_ref()
-            .expect("cert_dir missing")
-            .join(format!("{}.cer", domain.as_ref().expect("domain missing")))
-    });
-    let key_path = key_path.unwrap_or_else(|| {
-        cert_dir
-            .as_ref()
-            .expect("cert_dir missing")
-            .join(format!("{}.key", domain.as_ref().expect("domain missing")))
-    });
+    let (cert_path, key_path) = resolve_cert_paths(cert_path, key_path, cert_dir, domain)?;
 
     let output_dir = resolve_path(
         args.output_dir,
@@ -378,10 +363,12 @@ pub fn write_proxy_config(
         .map_err(|e| format!("Failed to create {}: {e}", output_dir.display()))?;
     fs::write(&output_path, content)
         .map_err(|e| format!("Failed to write {}: {e}", output_path.display()))?;
+    success("reverse proxy config written");
     Ok(())
 }
 
 pub fn print_params_table() -> Result<(), String> {
+    step("Supported parameters");
     let rows = vec![
         (
             "--env KEY=VALUE",
@@ -479,4 +466,25 @@ pub fn print_params_table() -> Result<(), String> {
     }
     println!("{}", border);
     Ok(())
+}
+
+fn resolve_cert_paths(
+    cert_path: Option<PathBuf>,
+    key_path: Option<PathBuf>,
+    cert_dir: Option<PathBuf>,
+    domain: Option<String>,
+) -> Result<(PathBuf, PathBuf), String> {
+    match (cert_path, key_path) {
+        (Some(cert_path), Some(key_path)) => Ok((cert_path, key_path)),
+        (None, None) => {
+            let cert_dir =
+                cert_dir.ok_or("cert_dir is required to derive cert paths".to_string())?;
+            let domain = domain.ok_or("domain is required to derive cert paths".to_string())?;
+            Ok((
+                cert_dir.join(format!("{}.cer", domain)),
+                cert_dir.join(format!("{}.key", domain)),
+            ))
+        }
+        _ => Err("Both cert and key paths must be set together".to_string()),
+    }
 }
