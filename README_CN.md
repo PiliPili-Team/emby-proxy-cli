@@ -14,6 +14,8 @@
 
 Emby Proxy CLI 是一个基于 Rust 的工具，用于通过 acme.sh 申请证书并生成 Nginx 反向代理配置，避免硬编码敏感信息。
 
+[English](README.md) | 中文文档
+
 ## 功能
 
 - 证书申请：参数 / 环境变量 / 交互式输入三选一。

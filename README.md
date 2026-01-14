@@ -14,6 +14,8 @@
 
 Emby Proxy CLI is a Rust-based tool for issuing certificates with acme.sh and generating Nginx reverse proxy configs without hardcoded secrets.
 
+[English](#features) | [中文文档](README_CN.md)
+
 ## Features
 
 - Issue certificates with Cloudflare DNS API inputs from args, env, or interactive prompts.
