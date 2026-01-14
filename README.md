@@ -73,6 +73,29 @@ Simulate without changes:
 emby-proxy-cli write-proxy-config --dry-run
 ```
 
+One-shot setup (multi-step):
+
+Issue cert with acme.sh:
+
+```bash
+sudo emby-proxy-cli setup
+sudo emby-proxy-cli issue-cert --domain example.com --wildcard-domain '*.example.com' --reload-nginx
+sudo emby-proxy-cli write-proxy-config --proxy-domain proxy.example.com --backend-url https://emby.example.com:443
+```
+
+Use existing cert/key:
+
+```bash
+sudo emby-proxy-cli setup
+sudo emby-proxy-cli issue-cert \
+  --cert-input-path /root/pilipili/example.com.cer \
+  --key-input-path /root/pilipili/example.com.key \
+  --cert-output-path /etc/ca-certificates/custom/example.com.cer \
+  --key-output-path /etc/ca-certificates/custom/example.com.key \
+  --reload-nginx
+sudo emby-proxy-cli write-proxy-config --proxy-domain proxy.example.com --backend-url https://emby.example.com:443
+```
+
 ## Parameters
 
 ### Global
@@ -100,6 +123,8 @@ emby-proxy-cli --env CF_TOKEN=*** --env DOMAIN=example.com issue-cert
 | `--acme-home` / `ACME_HOME` | acme home directory |
 | `--cert-dir` / `CERT_DIR` | Certificate directory (absolute path) |
 | `--cert-dir-name` / `CERT_DIR_NAME` | Certificate directory name |
+| `--cert-input-path` / `CERT_INPUT_PATH` | Certificate input path (pair with key) |
+| `--key-input-path` / `KEY_INPUT_PATH` | Key input path (pair with cert) |
 | `--cert-output-path` / `CERT_OUTPUT_PATH` | Certificate output path (pair with key) |
 | `--key-output-path` / `KEY_OUTPUT_PATH` | Key output path (pair with cert) |
 | `--nginx-bin` / `NGINX_BIN` | nginx binary |

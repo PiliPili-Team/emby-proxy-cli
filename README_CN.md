@@ -73,6 +73,29 @@ Dry-run 预演：
 emby-proxy-cli write-proxy-config --dry-run
 ```
 
+一键 setup（分步骤）：
+
+使用 acme.sh 申请证书：
+
+```bash
+sudo emby-proxy-cli setup
+sudo emby-proxy-cli issue-cert --domain example.com --wildcard-domain '*.example.com' --reload-nginx
+sudo emby-proxy-cli write-proxy-config --proxy-domain proxy.example.com --backend-url https://emby.example.com:443
+```
+
+使用已有证书：
+
+```bash
+sudo emby-proxy-cli setup
+sudo emby-proxy-cli issue-cert \
+  --cert-input-path /root/pilipili/example.com.cer \
+  --key-input-path /root/pilipili/example.com.key \
+  --cert-output-path /etc/ca-certificates/custom/example.com.cer \
+  --key-output-path /etc/ca-certificates/custom/example.com.key \
+  --reload-nginx
+sudo emby-proxy-cli write-proxy-config --proxy-domain proxy.example.com --backend-url https://emby.example.com:443
+```
+
 ## 参数
 
 ### 全局
@@ -100,6 +123,8 @@ emby-proxy-cli --env CF_TOKEN=*** --env DOMAIN=example.com issue-cert
 | `--acme-home` / `ACME_HOME` | acme home 目录 |
 | `--cert-dir` / `CERT_DIR` | 证书目录（绝对路径） |
 | `--cert-dir-name` / `CERT_DIR_NAME` | 证书目录名 |
+| `--cert-input-path` / `CERT_INPUT_PATH` | 证书输入路径（需配对 key） |
+| `--key-input-path` / `KEY_INPUT_PATH` | key 输入路径（需配对 cert） |
 | `--cert-output-path` / `CERT_OUTPUT_PATH` | 证书输出路径（需配对 key） |
 | `--key-output-path` / `KEY_OUTPUT_PATH` | key 输出路径（需配对 cert） |
 | `--nginx-bin` / `NGINX_BIN` | nginx 路径 |
