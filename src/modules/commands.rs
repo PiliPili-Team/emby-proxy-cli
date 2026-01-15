@@ -221,14 +221,15 @@ pub fn issue_cert(
         success("Certificate issuance completed");
     }
 
-    let cert_src = cache_dir.join("fullchain.cer");
-    let key_src = cache_dir.join(format!("{}.key", domain));
-
-    copy_cert_files(&cert_src, &key_src, &cert_dst, &key_dst, dry_run)?;
-
-    if reload_nginx {
-        reload_nginx_binary(nginx_bin.as_ref(), dry_run)?;
-    }
+    install_acme_cert(
+        &acme_bin,
+        &domain,
+        &cert_dst,
+        &key_dst,
+        reload_nginx,
+        nginx_bin.as_ref(),
+        dry_run,
+    )?;
 
     setup_acme_renew_cron(&acme_bin, &acme_home, dry_run)?;
 
@@ -539,6 +540,59 @@ fn copy_cert_files(
             .map_err(|e| format!("Failed to copy key from {}: {e}", key_src.display()))?;
         success("Certificate files updated");
     }
+    Ok(())
+}
+
+fn install_acme_cert(
+    acme_bin: &Path,
+    domain: &str,
+    cert_dst: &Path,
+    key_dst: &Path,
+    reload_nginx: bool,
+    nginx_bin: Option<&PathBuf>,
+    dry_run: bool,
+) -> Result<(), String> {
+    if let Some(parent) = cert_dst.parent() {
+        if dry_run {
+            info(&format!(
+                "[dry-run] Would create cert dir: {}",
+                parent.display()
+            ));
+        } else {
+            fs::create_dir_all(parent)
+                .map_err(|e| format!("Failed to create {}: {e}", parent.display()))?;
+        }
+    }
+
+    let mut cmd = Command::new(acme_bin);
+    cmd.arg("--install-cert")
+        .arg("-d")
+        .arg(domain)
+        .arg("--fullchain-file")
+        .arg(cert_dst)
+        .arg("--key-file")
+        .arg(key_dst)
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit());
+
+    if reload_nginx {
+        let nginx_bin = nginx_bin.ok_or("nginx binary is required for reload".to_string())?;
+        let reload_cmd = format!("{} -s reload", nginx_bin.display());
+        cmd.arg("--reloadcmd").arg(reload_cmd);
+    }
+
+    if dry_run {
+        info("[dry-run] Would run acme.sh --install-cert");
+        return Ok(());
+    }
+
+    let status = cmd
+        .status()
+        .map_err(|e| format!("Failed to run acme.sh --install-cert: {e}"))?;
+    if !status.success() {
+        return Err("acme.sh --install-cert failed".to_string());
+    }
+    success("Certificate files installed");
     Ok(())
 }
 
